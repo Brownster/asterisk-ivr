@@ -14,6 +14,10 @@ from pybreaker import CircuitBreaker
 from anomaly_detector import detect_anomalies  # Assumes an external anomaly detection library is available
 import yaml
 
+# Import our new STT and TTS modules
+from stt.azure_stt import recognize_speech_from_file
+from tts.azure_tts import synthesize_speech_to_file
+
 # --- Metrics Definitions ---
 SPEECH_RECOGNITION_ERRORS = Counter(
     'speech_recognition_errors_total',
@@ -123,7 +127,20 @@ def validate_speech_input(text):
         return False, "Unusual input pattern"
     return True, None
 
-# --- IVR Handler with Enhanced State Management and Fallbacks ---
+# --- Audio Recording Utility ---
+def record_audio(agi: AGI, output_file: str, max_duration: int = 5000) -> str:
+    """
+    Record audio from the caller using the AGI command.
+    This function records audio and returns the path to the saved file.
+    """
+    # Use the AGI command to record audio. Adjust parameters as needed.
+    # The following is a typical command: RECORD FILE <filename> <format> <timeout> <silence>
+    agi.verbose(f"Recording audio to {output_file}...", 3)
+    # Note: The actual method might differ based on your AGI library. Adjust as necessary.
+    agi.record_file(output_file, "wav", max_duration, "#", 3)
+    return output_file
+
+# --- IVR Handler with Enhanced STT/TTS Integration ---
 class IVRHandler:
     def __init__(self):
         start_http_server(9100)  # Expose Prometheus metrics on port 9100
@@ -158,12 +175,23 @@ class IVRHandler:
             
             # Main IVR loop
             while True:
-                # Retrieve user input (DTMF or speech)
+                # Check for DTMF input first
                 result = self.agi.get_data('custom-prompt', timeout=5000, maxdigits=1)
                 if result and result.digit:
                     self.handle_dtmf(result.digit)
-                elif 'TRANSCRIBED_TEXT' in self.agi.env:
-                    self.handle_speech(self.agi.env['TRANSCRIBED_TEXT'])
+                else:
+                    # If no DTMF, record audio for speech input
+                    audio_file = f"/tmp/{call_id}_recording.wav"
+                    record_audio(self.agi, audio_file)
+                    try:
+                        recognized_text = recognize_speech_from_file(audio_file)
+                    except Exception as stt_err:
+                        logger.error(f"STT error: {stt_err}")
+                        recognized_text = ""
+                    if recognized_text:
+                        self.handle_speech(recognized_text)
+                    else:
+                        self.agi.verbose("No speech recognized. Please try again.", 3)
                 
                 # Save session state
                 self.session_manager.save_session(call_id, {
@@ -222,6 +250,12 @@ class IVRHandler:
             
             response = self.llm.get_response(prompt)
             self._process_llm_response(response)
+            
+            # Synthesize the LLM response via TTS and play it back
+            tts_output = f"/tmp/{self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')}_tts.wav"
+            if synthesize_speech_to_file(response.get('text', ''), tts_output):
+                # Play back the synthesized audio to the caller
+                self.agi.stream_file(tts_output)
             
         except Exception as e:
             logger.error(f"Speech handling error: {e}")
