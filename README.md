@@ -46,8 +46,8 @@ Installation
 
     Clone the Repo:
 
-git clone https://github.com/yourusername/dynamic-ivr-llm.git
-cd dynamic-ivr-llm
+git clone https://github.com/brownster/asterisk-ivr.git
+cd asterisk-ivr
 
 Install Dependencies:
 
