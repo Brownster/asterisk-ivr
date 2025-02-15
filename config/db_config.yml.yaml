@@ -1,0 +1,8 @@
+database:
+  dialect: mysql
+  driver: pymysql
+  username: freepbx_user
+  password: secure_password
+  host: localhost
+  port: 3306
+  database_name: freepbx_llm
