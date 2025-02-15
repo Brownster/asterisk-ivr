@@ -80,29 +80,8 @@ Start the IVR handler (for testing purposes, you might run it from the command l
 python -m src.ivr.agi_handler
 
 This will spin up the Prometheus HTTP server on port 9100 for metrics, and the AGI handler will be ready to process calls.
-📂 Project Structure
+![Screenshot_20250215_200945](https://github.com/user-attachments/assets/fdca8a47-9b2a-49aa-a19e-039e31774a27)
 
-dynamic-ivr-llm/
-├── config/
-│   ├── call_flows.yml          # YAML file defining call states and transitions
-│   ├── db_config.yml           # Database configuration
-│   └── llm_config.yml          # LLM (OpenAI) configuration
-├── src/
-│   ├── db/
-│   │   ├── models.py           # SQLAlchemy ORM models for callers and chat history
-│   │   ├── db.py               # Database connection and migration logic
-│   │   └── migrations/         # Alembic migration scripts
-│   ├── ivr/
-│   │   └── agi_handler.py      # The main IVR AGI handler with state & session management
-│   ├── llm/
-│   │   └── llm_client.py       # Client for LLM integration (with rate limiting & circuit breaker)
-│   └── utils/
-│       └── logger.py           # JSON logging and metrics tracking
-├── tests/
-│   └── test_ivr.py           # Sample integration and unit tests
-├── alembic.ini               # Alembic configuration for migrations
-├── requirements.txt          # Project dependencies
-└── README.md                 # This file!
 
 
 🤝 Contributing
