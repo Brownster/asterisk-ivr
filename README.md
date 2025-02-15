@@ -1,9 +1,8 @@
 Dynamic IVR with LLM Integration
 
-Welcome to Dynamic IVR with LLM Integration – a fun project that marries traditional telephony with modern AI! This repository contains a Interactive Voice Response (IVR) system powered by Asterisk, complete with dynamic call flow state management, natural language understanding through an LLM, and robust monitoring and session management.
+Welcome to Dynamic IVR with LLM Integration – a cutting-edge project that marries traditional telephony with modern AI! This repository contains an Interactive Voice Response (IVR) system powered by Asterisk, complete with dynamic call flow state management, natural language understanding through an LLM, and robust monitoring and session management.
 
-    Imagine a phone system that greets your callers by name, understands their needs, and intelligently routes calls – all while keeping you in the loop with real-time metrics.
-
+Imagine a phone system that greets your callers by name, understands their needs, and intelligently routes calls – all while keeping you in the loop with real-time metrics.
 🚀 Features
 
     IVR Engine:
@@ -16,7 +15,7 @@ Welcome to Dynamic IVR with LLM Integration – a fun project that marries tradi
 
     LLM Integration:
         Leverages OpenAI's API to power conversational interactions.
-        Structured LLM responses drive state transitions.
+        Structured LLM responses drive state transitions and tool calls.
 
     Session & Security Enhancements:
         Redis-backed session management with encryption.
@@ -28,18 +27,30 @@ Welcome to Dynamic IVR with LLM Integration – a fun project that marries tradi
 
     Monitoring & Metrics:
         Prometheus metrics exposed via an HTTP server.
-        Detailed logging using JSON format with real-time performance insights.
+        Detailed JSON-formatted logging with real-time performance insights.
+
+    Modular STT/TTS Integration:
+        Start with Microsoft Azure for both Speech-to-Text and Text-to-Speech.
+        Easily swap out providers as your needs evolve.
+
+    Intelligent Call Routing:
+        Distinguish between allowed callers, unknown callers, and internal calls.
+        Multi-turn conversation flows to clarify caller intent.
+        Automatically handle intents such as "speak to Dad", "speak to Browny", "sales call", and "scam call".
 
 🎉 Getting Started
 Prerequisites
 
-    Python 3.8+
-    MySQL/MariaDB (for FreePBX and IVR database)
-    Asterisk/FreePBX (for telephony integration)
-    Redis (for session and rate limiting)
+    Python: 3.8+
+    MySQL/MariaDB: (for FreePBX and IVR database)
+    Asterisk/FreePBX: (for telephony integration)
+    Redis: (for session and rate limiting)
+    Azure Speech Resource: (for STT/TTS integration)
     Environment Variables:
         LLM_API_KEY – Your OpenAI API key
         SESSION_KEY – A secret key for session encryption (use Fernet.generate_key() to create one)
+        SPEECH_KEY – Your Azure Speech resource key
+        SPEECH_REGION – Your Azure Speech resource region
         Optionally, DB SSL variables (DB_SSL_CA, DB_SSL_CERT, DB_SSL_KEY) if needed
 
 Installation
@@ -59,6 +70,8 @@ Create a .env file (or export variables in your shell) with your secrets:
 
     export LLM_API_KEY="your-openai-api-key"
     export SESSION_KEY="your-generated-fernet-key"
+    export SPEECH_KEY="your-azure-speech-key"
+    export SPEECH_REGION="your-azure-speech-region"
     export DB_SSL_CA="/path/to/ca.pem"
     export DB_SSL_CERT="/path/to/client-cert.pem"
     export DB_SSL_KEY="/path/to/client-key.pem"
@@ -67,11 +80,11 @@ Create a .env file (or export variables in your shell) with your secrets:
     Set Up the Database:
         Create the freepbx_llm database in MySQL.
         Ensure your config/db_config.yml matches your database settings.
-        Run Alembic migrations automatically during startup!
+        Run Alembic migrations automatically during startup.
 
     Configure Asterisk:
         Set up your AGI configuration in FreePBX to point to src/ivr/agi_handler.py.
-        Ensure that your Asterisk environment populates the TRANSCRIBED_TEXT variable for speech-to-text functionality.
+        Ensure your Asterisk environment populates the TRANSCRIBED_TEXT variable for speech-to-text functionality.
 
 🛠 Usage
 
@@ -80,9 +93,40 @@ Start the IVR handler (for testing purposes, you might run it from the command l
 python -m src.ivr.agi_handler
 
 This will spin up the Prometheus HTTP server on port 9100 for metrics, and the AGI handler will be ready to process calls.
-![Screenshot_20250215_200945](https://github.com/user-attachments/assets/fdca8a47-9b2a-49aa-a19e-039e31774a27)
+📂 Project Structure
 
-
+asterisk-ivr/
+├── config/
+│   ├── allowed_callers.yml    # YAML file for allowed caller numbers.
+│   ├── call_flows.yml         # YAML file defining call states and transitions.
+│   ├── db_config.yml          # Database configuration.
+│   └── llm_config.yml         # LLM (OpenAI) configuration.
+├── src/
+│   ├── db/
+│   │   ├── models.py          # SQLAlchemy ORM models.
+│   │   ├── db.py              # Database connection and migration logic.
+│   │   └── migrations/        # Alembic migration scripts.
+│   ├── ivr/
+│   │   ├── agi_handler.py     # Main AGI handler.
+│   │   ├── allowed_callers.py # Logic for handling allowed callers.
+│   │   ├── call_state.py      # Call flow configuration and state management.
+│   │   ├── session_manager.py # Session encryption and management.
+│   │   ├── rate_limiter.py    # Rate limiting functionality.
+│   │   ├── audio_util.py      # Audio recording utilities.
+│   │   └── unknown_caller.py  # Handling for unknown callers.
+│   ├── llm/
+│   │   └── llm_client.py      # LLM integration with rate limiting and error handling.
+│   ├── stt/
+│   │   └── azure_stt.py       # Azure Speech-to-Text integration.
+│   ├── tts/
+│   │   └── azure_tts.py       # Azure Text-to-Speech integration.
+│   └── utils/
+│       └── logger.py          # JSON logging and metrics.
+├── tests/
+│   └── test_ivr.py          # Sample integration and unit tests.
+├── alembic.ini              # Alembic configuration for migrations.
+├── requirements.txt         # Project dependencies.
+└── README.md                # This file.
 
 🤝 Contributing
 
@@ -100,8 +144,4 @@ This project is licensed under the MIT License – see the LICENSE file for deta
 🌟 Acknowledgments
 
     Inspired by modern conversational IVR systems.
-    Powered by the brilliant teams behind Asterisk, OpenAI, and Prometheus.
-    Special thanks to our contributors and the open-source community for their ongoing support.
-
-Get ready to revolutionize your call flows with AI!
-Happy Coding! 🚀
+    Powered by the brilliant teams behind Asterisk, OpenAI, Azure, and Prometheus.
