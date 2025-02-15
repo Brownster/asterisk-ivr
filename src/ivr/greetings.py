@@ -3,9 +3,14 @@ from datetime import datetime
 
 def load_greetings(config_path='config/greetings.yml'):
     """Load greeting templates from the YAML configuration file."""
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-    return data.get('greetings', {})
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        return data.get('greetings', {})
+    except Exception as e:
+        # Log error or raise exception as needed
+        print(f"Error loading greetings from {config_path}: {e}")
+        return {}
 
 def select_greeting(caller_type='external'):
     """
@@ -24,14 +29,12 @@ def select_greeting(caller_type='external'):
     
     return greetings.get(caller_type, {}).get(time_of_day, "Hello, how can I help you?")
 
-# Example usage in your AGI handler:
-caller_id = "..."  # your logic to determine caller ID
-my_cli = "+15550000000"  # internal caller
-
-if caller_id == my_cli:
-    greeting = select_greeting('internal')
-else:
-    greeting = select_greeting('external')
-
-# Then use the greeting, e.g. send it to TTS or display it as a prompt:
-print(greeting)
+if __name__ == "__main__":
+    # Example usage in your AGI handler:
+    caller_id = "..."  # Your logic to determine caller ID
+    my_cli = "+15550000000"  # Internal caller
+    if caller_id == my_cli:
+        greeting = select_greeting('internal')
+    else:
+        greeting = select_greeting('external')
+    print(greeting)
