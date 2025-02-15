@@ -50,6 +50,12 @@ def validate_speech_input(text):
         return False, "Unusual input pattern"
     return True, None
 
+
+def load_owner_callers(config_path='config/owner_callers.yml'):
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+    return data.get('owner_callers', [])
+
 # --- Circuit Breaker for LLM Calls ---
 LLM_BREAKER = CircuitBreaker(
     fail_max=5, 
@@ -74,14 +80,43 @@ class IVRHandler:
     @CALL_DURATION.time()
     def handle_call(self):
         try:
-            raw_caller_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
-            caller_id = validate_caller_id(raw_caller_id)
-            if caller_id == my_cli:
+raw_caller_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
+caller_id = validate_caller_id(raw_caller_id)
+
+# Load internal caller list, e.g., from config/owner_callers.yml (if needed)
+owner_callers = load_owner_callers()  # Assuming you have a function for this.
+
+            if caller_id in owner_callers:
                 greeting = select_greeting('internal')
-            else:
-                greeting = select_greeting('external')
-            self.agi.verbose(greeting, 3)
-                # Internal caller functionality here.
+                self.agi.verbose(greeting, 3)
+                
+                # Load conversation history from the database for the known internal caller.
+                conversation_history = self.db.get_conversation_history(caller_id)
+                if conversation_history:
+                    self.agi.verbose("Loaded previous conversation history.", 3)
+                else:
+                    conversation_history = []
+                
+                # Build an initial prompt for the internal caller.
+                prompt = {
+                    "caller_id": caller_id,
+                    "chat_history": conversation_history,
+                    "current_input": "",  # No new input yet; this is just to set context.
+                    "call_context": "internal"
+                }
+                
+                # Optionally, send the prompt to the LLM to get an updated message or instructions.
+                response = self.llm.get_response(prompt)
+                try:
+                    structured = json.loads(response.get('text', '{}'))
+                    if 'message' in structured:
+                        self.agi.verbose(structured['message'], 3)
+                    else:
+                        self.agi.verbose("Internal call processed.", 3)
+                except Exception as e:
+                    self.agi.verbose("Internal call processed.", 3)
+                
+                # Continue processing internal caller interactions as needed.
                 return
 
             # For allowed callers, start allowed conversation; otherwise, unknown.
