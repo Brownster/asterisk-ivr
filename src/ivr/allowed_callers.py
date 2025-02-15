@@ -3,6 +3,7 @@ import json
 from json import JSONDecodeError
 from utils.logger import logger
 from stt.azure_stt import recognize_speech_from_file
+from intents import load_intents  # New import to load intents for allowed callers
 
 def load_allowed_callers(config_path='config/allowed_callers.yml'):
     """
@@ -15,12 +16,15 @@ def load_allowed_callers(config_path='config/allowed_callers.yml'):
 def handle_allowed_caller_conversation(agi, llm, call_id):
     """
     Engage in up to three rounds of conversation with an allowed caller
-    to ascertain intent. If a supported intent is recognized (e.g., speak_to_dad
-    or speak_to_browny), perform the corresponding action.
-    Otherwise, after three rounds, apologize and hang up.
+    to ascertain intent using intents loaded from configuration.
+    If a supported intent is recognized (e.g., speak_to_dad or speak_to_browny),
+    perform the corresponding action. Otherwise, after three rounds, apologize and hang up.
     """
     max_retries = 3
     conversation_history = []
+    # Load allowed caller intents (e.g., from config/known_caller_intents.yml)
+    intents = load_intents("known")
+    
     for attempt in range(max_retries):
         agi.verbose("How can we help you today? Please state your request.", 3)
         audio_file = f"/tmp/{call_id}_allowed.wav"
@@ -45,16 +49,20 @@ def handle_allowed_caller_conversation(agi, llm, call_id):
         try:
             structured = json.loads(response.get('text', '{}'))
             intent = structured.get("intent", "")
-            if intent in ["speak_to_dad", "speak_to_browny"]:
+            # Check if the recognized intent is among those allowed for known callers.
+            if intent in intents:
                 conversation_history.append({"role": "system", "content": structured.get("message", "")})
-                if intent == "speak_to_dad":
-                    agi.verbose("Transferring to Dad...", 3)
-                    agi.set_variable("TRANSFER_EXTENSION", "200")
+                # Use the extension or action defined in the intents file.
+                intent_info = intents[intent]
+                if "extension" in intent_info:
+                    agi.verbose(intent_info.get("prompt", "Transferring your call..."), 3)
+                    agi.set_variable("TRANSFER_EXTENSION", intent_info["extension"])
                     return
-                elif intent == "speak_to_browny":
-                    agi.verbose("Transferring to Browny...", 3)
-                    agi.set_variable("TRANSFER_EXTENSION", "300")
+                elif intent_info.get("action") == "hangup":
+                    agi.verbose(intent_info.get("prompt", "Goodbye."), 3)
+                    agi.hangup()
                     return
+                # Future tool calls can be processed here.
             else:
                 conversation_history.append({"role": "system", "content": structured.get("message", "Could you please clarify?")})
         except JSONDecodeError:
