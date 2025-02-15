@@ -127,38 +127,6 @@ This will spin up the Prometheus HTTP server on port 9100 for metrics, and the A
 
 
 
-Prometheus Metrics Example;
-
-# HELP llm_requests_total Total LLM requests
-# TYPE llm_requests_total counter
-llm_requests_total{status="success"} 25
-llm_requests_total{status="error"} 2
-
-# HELP call_duration_seconds Total call duration
-# TYPE call_duration_seconds histogram
-call_duration_seconds_bucket{le="0.005"} 5
-call_duration_seconds_bucket{le="0.01"} 8
-call_duration_seconds_bucket{le="0.025"} 10
-call_duration_seconds_bucket{le="0.05"} 12
-call_duration_seconds_bucket{le="+Inf"} 15
-call_duration_seconds_sum 0.45
-call_duration_seconds_count 15
-
-# HELP state_transitions_total State machine transitions
-# TYPE state_transitions_total counter
-state_transitions_total{from_state="initial",to_state="processing"} 10
-state_transitions_total{from_state="processing",to_state="resolution"} 3
-state_transitions_total{from_state="processing",to_state="escalation"} 2
-state_transitions_total{from_state="initial",to_state="fallback"} 1
-
-# HELP speech_recognition_errors_total Total speech recognition errors
-# TYPE speech_recognition_errors_total counter
-speech_recognition_errors_total{error_type="Input too short"} 4
-speech_recognition_errors_total{error_type="Invalid characters detected"} 0
-speech_recognition_errors_total{error_type="exception"} 1
-
-
-
 🤝 Contributing
 
 We welcome contributions from the community! Whether it's fixing bugs, improving documentation, or adding exciting new features, feel free to submit a pull request.
