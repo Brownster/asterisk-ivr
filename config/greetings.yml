@@ -1,0 +1,9 @@
+greetings:
+  internal:
+    morning: "Good morning Mr Brown, how can I assist you today?"
+    afternoon: "Good afternoon Mr Brown, how can I assist you today?"
+    evening: "Good evening Mr Brown, how can I assist you today?"
+  external:
+    morning: "Good morning! Welcome to our service. How can we help you today?"
+    afternoon: "Good afternoon! Welcome to our service. How can we help you today?"
+    evening: "Good evening! Welcome to our service. How can we help you today?"
