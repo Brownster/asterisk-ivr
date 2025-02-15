@@ -93,40 +93,10 @@ Start the IVR handler (for testing purposes, you might run it from the command l
 python -m src.ivr.agi_handler
 
 This will spin up the Prometheus HTTP server on port 9100 for metrics, and the AGI handler will be ready to process calls.
-📂 Project Structure
 
-asterisk-ivr/
-├── config/
-│   ├── allowed_callers.yml    # YAML file for allowed caller numbers.
-│   ├── call_flows.yml         # YAML file defining call states and transitions.
-│   ├── db_config.yml          # Database configuration.
-│   └── llm_config.yml         # LLM (OpenAI) configuration.
-├── src/
-│   ├── db/
-│   │   ├── models.py          # SQLAlchemy ORM models.
-│   │   ├── db.py              # Database connection and migration logic.
-│   │   └── migrations/        # Alembic migration scripts.
-│   ├── ivr/
-│   │   ├── agi_handler.py     # Main AGI handler.
-│   │   ├── allowed_callers.py # Logic for handling allowed callers.
-│   │   ├── call_state.py      # Call flow configuration and state management.
-│   │   ├── session_manager.py # Session encryption and management.
-│   │   ├── rate_limiter.py    # Rate limiting functionality.
-│   │   ├── audio_util.py      # Audio recording utilities.
-│   │   └── unknown_caller.py  # Handling for unknown callers.
-│   ├── llm/
-│   │   └── llm_client.py      # LLM integration with rate limiting and error handling.
-│   ├── stt/
-│   │   └── azure_stt.py       # Azure Speech-to-Text integration.
-│   ├── tts/
-│   │   └── azure_tts.py       # Azure Text-to-Speech integration.
-│   └── utils/
-│       └── logger.py          # JSON logging and metrics.
-├── tests/
-│   └── test_ivr.py          # Sample integration and unit tests.
-├── alembic.ini              # Alembic configuration for migrations.
-├── requirements.txt         # Project dependencies.
-└── README.md                # This file.
+![Screenshot_20250215_222213](https://github.com/user-attachments/assets/4c757166-a19e-49e5-891e-2c6bfbca2810)
+
+
 
 🤝 Contributing
 
