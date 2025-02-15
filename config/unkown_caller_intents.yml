@@ -1,0 +1,7 @@
+intents:
+  sales_call:
+    prompt: "It appears this is a sales call. Goodbye."
+    action: "hangup"
+  scam_call:
+    prompt: "Transferring your call to our scam IVR."
+    extension: "scam_ivr"
