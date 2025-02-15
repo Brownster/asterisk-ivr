@@ -20,6 +20,7 @@ from rate_limiter import RateLimiter
 from audio_util import record_audio
 from unknown_caller import handle_unknown_caller  # Existing module for unknown callers.
 from allowed_callers import load_allowed_callers, handle_allowed_caller_conversation
+from utils.greetings import select_greeting
 
 # --- Metrics Definitions ---
 SPEECH_RECOGNITION_ERRORS = Counter(
@@ -75,12 +76,11 @@ class IVRHandler:
         try:
             raw_caller_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
             caller_id = validate_caller_id(raw_caller_id)
-            call_id = self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')
-            
-            # Check if caller is the internal caller.
-            my_cli = "+15550000000"  # Replace with your CLI
             if caller_id == my_cli:
-                self.agi.verbose("Hello Mr Brown", 3)
+                greeting = select_greeting('internal')
+            else:
+                greeting = select_greeting('external')
+            self.agi.verbose(greeting, 3)
                 # Internal caller functionality here.
                 return
 
