@@ -3,7 +3,7 @@ import json
 from json import JSONDecodeError
 from utils.logger import logger
 from stt.azure_stt import recognize_speech_from_file
-from intents import load_intents  # New import to load intents for allowed callers
+from intents import load_intents  # Load intents dynamically
 
 def load_allowed_callers(config_path='config/allowed_callers.yml'):
     """
@@ -13,15 +13,20 @@ def load_allowed_callers(config_path='config/allowed_callers.yml'):
         data = yaml.safe_load(f)
     return data.get('allowed_callers', [])
 
-def handle_allowed_caller_conversation(agi, llm, call_id):
+def handle_allowed_caller_conversation(agi, llm, call_id, conversation_history=None):
     """
     Engage in up to three rounds of conversation with an allowed caller
     to ascertain intent using intents loaded from configuration.
+    Any existing conversation history (e.g., from previous calls) can be passed in
+    so that the LLM prompt includes that context.
+    
     If a supported intent is recognized (e.g., speak_to_dad or speak_to_browny),
     perform the corresponding action. Otherwise, after three rounds, apologize and hang up.
     """
     max_retries = 3
-    conversation_history = []
+    if conversation_history is None:
+        conversation_history = []
+    
     # Load allowed caller intents (e.g., from config/known_caller_intents.yml)
     intents = load_intents("known")
     
@@ -49,7 +54,7 @@ def handle_allowed_caller_conversation(agi, llm, call_id):
         try:
             structured = json.loads(response.get('text', '{}'))
             intent = structured.get("intent", "")
-            # Check if the recognized intent is among those allowed for known callers.
+            # Check if the recognized intent is among those defined for known callers.
             if intent in intents:
                 conversation_history.append({"role": "system", "content": structured.get("message", "")})
                 # Use the extension or action defined in the intents file.
