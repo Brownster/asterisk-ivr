@@ -3,18 +3,24 @@ import time
 from json import JSONDecodeError
 from utils.logger import logger
 from stt.azure_stt import recognize_speech_from_file
+from intents import load_intents  # Load intents dynamically
 
 def handle_unknown_caller(agi, llm, call_id):
     """
     Engage in up to three rounds of conversation with an unknown caller to ascertain intent.
-    If no valid intent is derived, apologize and hang up.
+    Loads the intents from the corresponding YAML file (config/unknown_caller_intents.yml).
+    If a supported intent is recognized (e.g., sales_call or scam_call), perform the corresponding action.
+    Otherwise, after three rounds, apologize and hang up.
     """
     max_retries = 3
     conversation_history = []
+    # Load unknown caller intents from configuration
+    intents = load_intents("unknown")
+    
     for attempt in range(max_retries):
         agi.verbose("How can we help you?", 3)
         audio_file = f"/tmp/{call_id}_unknown.wav"
-        # Record caller response (assuming record_audio is called here or via AGI)
+        # Record caller response
         agi.record_file(audio_file, "wav", 5000, "#", 3)
         try:
             recognized_text = recognize_speech_from_file(audio_file)
@@ -35,16 +41,20 @@ def handle_unknown_caller(agi, llm, call_id):
         try:
             structured = json.loads(response.get('text', '{}'))
             intent = structured.get("intent", "")
-            if intent in ["sales_call", "scam_call"]:
+            # Check if the intent is one defined in the unknown caller intents.
+            if intent in intents:
                 conversation_history.append({"role": "system", "content": structured.get("message", "")})
-                if intent == "sales_call":
-                    agi.verbose("Sales call detected; hanging up.", 3)
+                # Act based on the intent's configuration.
+                intent_info = intents[intent]
+                if intent_info.get("action") == "hangup":
+                    agi.verbose(intent_info.get("prompt", "Sales call detected; hanging up."), 3)
                     agi.hangup()
                     return
-                elif intent == "scam_call":
-                    agi.verbose("Scam call detected; transferring to scam IVR.", 3)
-                    agi.set_variable("TRANSFER_EXTENSION", "scam_ivr")
+                elif "extension" in intent_info:
+                    agi.verbose(intent_info.get("prompt", "Transferring your call..."), 3)
+                    agi.set_variable("TRANSFER_EXTENSION", intent_info["extension"])
                     return
+                # Future tool calls can be handled here as well.
             else:
                 conversation_history.append({"role": "system", "content": structured.get("message", "Could you please clarify?")})
         except JSONDecodeError:
