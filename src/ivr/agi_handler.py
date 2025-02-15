@@ -8,15 +8,18 @@ from utils.logger import logger
 from db.db import Database
 from llm.llm_client import LLMClient, TooManyRequests
 from redis import Redis
-from prometheus_client import start_http_server, Counter, Histogram
-from cryptography.fernet import Fernet
+from prometheus_client import start_http_server, Histogram, Counter
 from pybreaker import CircuitBreaker
 from anomaly_detector import detect_anomalies  # Assumes an external anomaly detection library is available
 import yaml
 
-# Import our new STT and TTS modules
-from stt.azure_stt import recognize_speech_from_file
-from tts.azure_tts import synthesize_speech_to_file
+# Import our modular components.
+from call_state import CallFlow, CallState
+from session_manager import SessionManager
+from rate_limiter import RateLimiter
+from audio_util import record_audio
+from unknown_caller import handle_unknown_caller  # Existing module for unknown callers.
+from allowed_callers import load_allowed_callers, handle_allowed_caller_conversation
 
 # --- Metrics Definitions ---
 SPEECH_RECOGNITION_ERRORS = Counter(
@@ -27,87 +30,6 @@ SPEECH_RECOGNITION_ERRORS = Counter(
 CALL_DURATION = Histogram(
     'call_duration_seconds',
     'Total call duration'
-)
-STATE_TRANSITIONS = Counter(
-    'state_transitions_total',
-    'State machine transitions',
-    ['from_state', 'to_state']
-)
-
-# --- Call Flow Configuration ---
-class CallFlow:
-    def __init__(self, config_path='config/call_flows.yml'):
-        with open(config_path) as f:
-            self.states = yaml.safe_load(f)['states']
-
-    def get_valid_transitions(self, state):
-        return self.states.get(state, {}).get('transitions', [])
-
-    def validate_transition(self, from_state, to_state):
-        valid_transitions = self.get_valid_transitions(from_state)
-        if to_state not in valid_transitions:
-            raise ValueError(f"Invalid transition {from_state}→{to_state}")
-
-# --- Call State Management ---
-class CallState:
-    def __init__(self, call_flow: CallFlow):
-        self.current_state = "initial"
-        self.context = {}
-        self.last_response = None
-        self.retry_count = 0
-        self.call_flow = call_flow
-
-    def transition(self, new_state):
-        self.call_flow.validate_transition(self.current_state, new_state)
-        STATE_TRANSITIONS.labels(from_state=self.current_state, to_state=new_state).inc()
-        self.current_state = new_state
-        self.retry_count = 0
-
-# --- Session Management with Encryption ---
-class SessionManager:
-    def __init__(self, redis_client):
-        self.redis = redis_client
-        key = os.getenv("SESSION_KEY")
-        if not key:
-            raise ValueError("SESSION_KEY environment variable not set")
-        self.cipher = Fernet(key)
-
-    def save_session(self, call_id, data):
-        session_key = f"session:{call_id}"
-        encrypted = self.cipher.encrypt(json.dumps(data).encode())
-        self.redis.setex(session_key, 3600, encrypted)
-
-    def get_session(self, call_id):
-        session_key = f"session:{call_id}"
-        data = self.redis.get(session_key)
-        if data:
-            try:
-                decrypted = self.cipher.decrypt(data)
-                return json.loads(decrypted.decode())
-            except Exception as e:
-                logger.error(f"Error decrypting session data for {call_id}: {e}")
-                return {}
-        return {}
-
-# --- Rate Limiting (Sliding Window) ---
-class RateLimiter:
-    def __init__(self, redis_client):
-        self.redis = redis_client
-        
-    def check_limit(self, caller_id, limit=5, window=60):
-        current = int(time.time())
-        window_key = f"ratelimit:{caller_id}:{current // window}"
-        pipe = self.redis.pipeline()
-        pipe.incr(window_key)
-        pipe.expire(window_key, window * 2)
-        current_count = pipe.execute()[0]
-        return current_count <= limit
-
-# --- Circuit Breaker for LLM Calls ---
-LLM_BREAKER = CircuitBreaker(
-    fail_max=5, 
-    reset_timeout=60,
-    exclude=[TooManyRequests]
 )
 
 # --- Input Validation ---
@@ -127,20 +49,14 @@ def validate_speech_input(text):
         return False, "Unusual input pattern"
     return True, None
 
-# --- Audio Recording Utility ---
-def record_audio(agi: AGI, output_file: str, max_duration: int = 5000) -> str:
-    """
-    Record audio from the caller using the AGI command.
-    This function records audio and returns the path to the saved file.
-    """
-    # Use the AGI command to record audio. Adjust parameters as needed.
-    # The following is a typical command: RECORD FILE <filename> <format> <timeout> <silence>
-    agi.verbose(f"Recording audio to {output_file}...", 3)
-    # Note: The actual method might differ based on your AGI library. Adjust as necessary.
-    agi.record_file(output_file, "wav", max_duration, "#", 3)
-    return output_file
+# --- Circuit Breaker for LLM Calls ---
+LLM_BREAKER = CircuitBreaker(
+    fail_max=5, 
+    reset_timeout=60,
+    exclude=[TooManyRequests]
+)
 
-# --- IVR Handler with Enhanced STT/TTS Integration ---
+# --- Main AGI Handler ---
 class IVRHandler:
     def __init__(self):
         start_http_server(9100)  # Expose Prometheus metrics on port 9100
@@ -152,38 +68,53 @@ class IVRHandler:
         self.session_manager = SessionManager(self.redis)
         self.call_flow = CallFlow()
         self.state = CallState(self.call_flow)
+        self.allowed_callers = load_allowed_callers()
 
     @CALL_DURATION.time()
     def handle_call(self):
         try:
-            # Retrieve and validate caller ID
             raw_caller_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
             caller_id = validate_caller_id(raw_caller_id)
             call_id = self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')
             
-            # Load session state if available
+            # Check if caller is the internal caller.
+            my_cli = "+15550000000"  # Replace with your CLI
+            if caller_id == my_cli:
+                self.agi.verbose("Hello Mr Brown", 3)
+                # Internal caller functionality here.
+                return
+
+            # For allowed callers, start allowed conversation; otherwise, unknown.
+            if caller_id in self.allowed_callers:
+                handle_allowed_caller_conversation(self.agi, self.llm, call_id)
+                return
+            else:
+                handle_unknown_caller(self.agi, self.llm, call_id)
+                return
+
+            # (If needed, further processing for allowed callers can follow here.)
+            
+            # Load session state if available.
             session_data = self.session_manager.get_session(call_id)
             if session_data:
                 self.state.current_state = session_data.get("current_state", "initial")
                 self.state.context = session_data.get("context", {})
                 logger.info(f"Loaded session state for call {call_id}")
             
-            # Retrieve or create caller record
             caller = self.db.get_caller(caller_id)
             if not caller:
                 logger.info(f"Caller {caller_id} not found; consider creating a new record.")
             
-            # Main IVR loop
+            # Main IVR loop for allowed callers (if you want to continue conversation).
             while True:
-                # Check for DTMF input first
                 result = self.agi.get_data('custom-prompt', timeout=5000, maxdigits=1)
                 if result and result.digit:
                     self.handle_dtmf(result.digit)
                 else:
-                    # If no DTMF, record audio for speech input
                     audio_file = f"/tmp/{call_id}_recording.wav"
                     record_audio(self.agi, audio_file)
                     try:
+                        from stt.azure_stt import recognize_speech_from_file
                         recognized_text = recognize_speech_from_file(audio_file)
                     except Exception as stt_err:
                         logger.error(f"STT error: {stt_err}")
@@ -193,31 +124,27 @@ class IVRHandler:
                     else:
                         self.agi.verbose("No speech recognized. Please try again.", 3)
                 
-                # Save session state
                 self.session_manager.save_session(call_id, {
                     "current_state": self.state.current_state,
                     "context": self.state.context
                 })
                 
-                # Check for hangup
                 if self.agi.env.get('agi_hangup') == 'true':
                     break
 
-                time.sleep(0.5)  # Avoid busy looping
+                time.sleep(0.5)
         except Exception as e:
             logger.error(f"Error in IVR handler: {e}")
             self.agi.hangup()
 
     def handle_dtmf(self, digit):
         """Handle DTMF input from the caller."""
-        logger.info(f"Received DTMF digit: {digit}")
         self.db.add_chat_history(
             self.agi.env.get('agi_callerid', 'UNKNOWN'),
             self.agi.env.get('agi_uniqueid', 'NO_CALL_ID'),
             'user',
             f"DTMF input: {digit}"
         )
-        # Example: if digit == '1', transition to processing state
         if digit == '1':
             try:
                 self.state.transition('processing')
@@ -235,8 +162,7 @@ class IVRHandler:
                 self._handle_speech_error()
                 return
 
-            # Retrieve recent chat history for context (placeholder list)
-            chat_history = []  # TODO: Implement actual retrieval if needed
+            chat_history = []  # Retrieve historical context as needed.
 
             prompt = {
                 "caller_id": self.agi.env.get('agi_callerid'),
@@ -251,10 +177,9 @@ class IVRHandler:
             response = self.llm.get_response(prompt)
             self._process_llm_response(response)
             
-            # Synthesize the LLM response via TTS and play it back
+            from tts.azure_tts import synthesize_speech_to_file
             tts_output = f"/tmp/{self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')}_tts.wav"
             if synthesize_speech_to_file(response.get('text', ''), tts_output):
-                # Play back the synthesized audio to the caller
                 self.agi.stream_file(tts_output)
             
         except Exception as e:
@@ -273,9 +198,7 @@ class IVRHandler:
             else:
                 self.agi.verbose(response.get('text', ''), 3)
         except JSONDecodeError:
-            # Fallback to plain text processing if JSON parsing fails
             self.agi.verbose(response.get('text', ''), 3)
-        # Log the LLM response into chat history
         self.db.add_chat_history(
             self.agi.env.get('agi_callerid', 'UNKNOWN'),
             self.agi.env.get('agi_uniqueid', 'NO_CALL_ID'),
