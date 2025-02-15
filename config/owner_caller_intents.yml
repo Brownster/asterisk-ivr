@@ -1,0 +1,4 @@
+intents:
+  home_assistant_tool:
+    prompt: "Checking Home Assistant status..."
+    tool_call: "home_assistant_check"
