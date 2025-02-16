@@ -22,14 +22,32 @@ class CallFlow:
 
 class CallState:
     def __init__(self, call_flow: CallFlow):
+        self.call_flow = call_flow
         self.current_state = "initial"
         self.context = {}
         self.last_response = None
         self.retry_count = 0
-        self.call_flow = call_flow
+        self.previous_state = None
 
     def transition(self, new_state):
         self.call_flow.validate_transition(self.current_state, new_state)
+        self.previous_state = self.current_state
         STATE_TRANSITIONS.labels(from_state=self.current_state, to_state=new_state).inc()
         self.current_state = new_state
         self.retry_count = 0
+
+    def load_from_session(self, session_data):
+        """Restore state from a session dictionary."""
+        self.current_state = session_data.get("current_state", "initial")
+        self.context = session_data.get("context", {})
+        self.retry_count = session_data.get("retry_count", 0)
+        self.last_response = session_data.get("last_response", None)
+
+    def to_session_dict(self):
+        """Convert the current state into a dictionary for session storage."""
+        return {
+            "current_state": self.current_state,
+            "context": self.context,
+            "retry_count": self.retry_count,
+            "last_response": self.last_response
+        }
