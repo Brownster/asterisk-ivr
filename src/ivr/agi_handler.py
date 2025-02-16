@@ -4,252 +4,112 @@ import json
 from json import JSONDecodeError
 import os
 from asterisk.agi import AGI
-from utils.logger import logger
-from db.db import Database
-from llm.llm_client import LLMClient, TooManyRequests
 from redis import Redis
-from prometheus_client import start_http_server, Histogram, Counter
-from pybreaker import CircuitBreaker
-from anomaly_detector import detect_anomalies  # Assumes an external anomaly detection library is available
-import yaml
-
-# Import our modular components.
-from call_state import CallFlow, CallState
-from session_manager import SessionManager
-from rate_limiter import RateLimiter
-from audio_util import record_audio
-from unknown_caller import handle_unknown_caller  # Existing module for unknown callers.
-from allowed_callers import load_allowed_callers, handle_allowed_caller_conversation
+from utils.logger import logger
+from monitoring import start_monitoring
+from call_manager import CallManager
+from speech_handler import process_speech, synthesize_response
+from llm_handler import LLMHandler
 from utils.greetings import select_greeting
+from allowed_callers import load_allowed_callers
+from unknown_caller import handle_unknown_caller
+from db.db import Database
 
-# --- Metrics Definitions ---
-SPEECH_RECOGNITION_ERRORS = Counter(
-    'speech_recognition_errors_total',
-    'Total speech recognition errors',
-    ['error_type']
-)
-CALL_DURATION = Histogram(
-    'call_duration_seconds',
-    'Total call duration'
-)
-
-# --- Input Validation ---
-def validate_caller_id(cli):
-    """Validate caller ID format and perform any blacklist checks."""
-    if not re.match(r'^\+?1?\d{10,15}$', cli):
-        raise ValueError("Invalid caller ID format")
-    return cli
-
-def validate_speech_input(text):
-    """Validate speech input for common issues, including anomaly detection."""
-    if len(text.strip()) < 2:
-        return False, "Input too short"
-    if any(char.isdigit() for char in text):
-        return False, "Invalid characters detected"
-    if detect_anomalies(text):
-        return False, "Unusual input pattern"
-    return True, None
-
-
-def load_owner_callers(config_path='config/owner_callers.yml'):
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-    return data.get('owner_callers', [])
-
-# --- Circuit Breaker for LLM Calls ---
-LLM_BREAKER = CircuitBreaker(
-    fail_max=5, 
-    reset_timeout=60,
-    exclude=[TooManyRequests]
-)
-
-# --- Main AGI Handler ---
 class IVRHandler:
     def __init__(self):
-        start_http_server(9100)  # Expose Prometheus metrics on port 9100
+        # Start Prometheus monitoring
+        start_monitoring()  # Exposes metrics on port 9100
+        
+        # Initialize core components
         self.agi = AGI()
-        self.db = Database()
-        self.llm = LLMClient()
-        self.redis = Redis(host='localhost', port=6379, db=0)
-        self.rate_limiter = RateLimiter(self.redis)
-        self.session_manager = SessionManager(self.redis)
-        self.call_flow = CallFlow()
-        self.state = CallState(self.call_flow)
-        self.allowed_callers = load_allowed_callers()
-
-    @CALL_DURATION.time()
-    def handle_call(self):
-        try:
-raw_caller_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
-caller_id = validate_caller_id(raw_caller_id)
-
-# Load internal caller list, e.g., from config/owner_callers.yml (if needed)
-owner_callers = load_owner_callers()  # Assuming you have a function for this.
-
-            if caller_id in owner_callers:
-                greeting = select_greeting('internal')
-                self.agi.verbose(greeting, 3)
-                
-                # Load conversation history from the database for the known internal caller.
-                conversation_history = self.db.get_conversation_history(caller_id)
-                if conversation_history:
-                    self.agi.verbose("Loaded previous conversation history.", 3)
-                else:
-                    conversation_history = []
-                
-                # Build an initial prompt for the internal caller.
-                prompt = {
-                    "caller_id": caller_id,
-                    "chat_history": conversation_history,
-                    "current_input": "",  # No new input yet; this is just to set context.
-                    "call_context": "internal"
-                }
-                
-                # Optionally, send the prompt to the LLM to get an updated message or instructions.
-                response = self.llm.get_response(prompt)
-                try:
-                    structured = json.loads(response.get('text', '{}'))
-                    if 'message' in structured:
-                        self.agi.verbose(structured['message'], 3)
-                    else:
-                        self.agi.verbose("Internal call processed.", 3)
-                except Exception as e:
-                    self.agi.verbose("Internal call processed.", 3)
-                
-                # Continue processing internal caller interactions as needed.
-                return
-
-            # For allowed callers, start allowed conversation; otherwise, unknown.
-            if caller_id in self.allowed_callers:
-                handle_allowed_caller_conversation(self.agi, self.llm, call_id)
-                return
-            else:
-                handle_unknown_caller(self.agi, self.llm, call_id)
-                return
-
-            # (If needed, further processing for allowed callers can follow here.)
-            
-            # Load session state if available.
-            session_data = self.session_manager.get_session(call_id)
-            if session_data:
-                self.state.current_state = session_data.get("current_state", "initial")
-                self.state.context = session_data.get("context", {})
-                logger.info(f"Loaded session state for call {call_id}")
-            
-            caller = self.db.get_caller(caller_id)
-            if not caller:
-                logger.info(f"Caller {caller_id} not found; consider creating a new record.")
-            
-            # Main IVR loop for allowed callers (if you want to continue conversation).
-            while True:
-                result = self.agi.get_data('custom-prompt', timeout=5000, maxdigits=1)
-                if result and result.digit:
-                    self.handle_dtmf(result.digit)
-                else:
-                    audio_file = f"/tmp/{call_id}_recording.wav"
-                    record_audio(self.agi, audio_file)
-                    try:
-                        from stt.azure_stt import recognize_speech_from_file
-                        recognized_text = recognize_speech_from_file(audio_file)
-                    except Exception as stt_err:
-                        logger.error(f"STT error: {stt_err}")
-                        recognized_text = ""
-                    if recognized_text:
-                        self.handle_speech(recognized_text)
-                    else:
-                        self.agi.verbose("No speech recognized. Please try again.", 3)
-                
-                self.session_manager.save_session(call_id, {
-                    "current_state": self.state.current_state,
-                    "context": self.state.context
-                })
-                
-                if self.agi.env.get('agi_hangup') == 'true':
-                    break
-
-                time.sleep(0.5)
-        except Exception as e:
-            logger.error(f"Error in IVR handler: {e}")
-            self.agi.hangup()
-
-    def handle_dtmf(self, digit):
-        """Handle DTMF input from the caller."""
-        self.db.add_chat_history(
-            self.agi.env.get('agi_callerid', 'UNKNOWN'),
-            self.agi.env.get('agi_uniqueid', 'NO_CALL_ID'),
-            'user',
-            f"DTMF input: {digit}"
+        self.redis = Redis(
+            host='localhost',
+            port=6379,
+            db=0,
+            password=os.getenv('REDIS_PASSWORD', '')
         )
-        if digit == '1':
-            try:
-                self.state.transition('processing')
-            except ValueError as ve:
-                logger.error(f"State transition error: {ve}")
+        self.db = Database()
+        self.call_manager = CallManager(self.redis)
+        self.llm_handler = LLMHandler()
+        
+        # Load allowed and owner caller lists from YAML configuration
+        self.allowed_callers = load_allowed_callers()  # e.g., from config/allowed_callers.yml
+        self.owner_callers = self._load_owner_callers()  # from config/owner_callers.yml
+        
+        # Retrieve call context from AGI environment
+        self.call_id = self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')
+        self.caller_id = self._validate_caller_id()
+        logger.info(f"Incoming call from {self.caller_id} (Call ID: {self.call_id})")
 
-    @LLM_BREAKER
-    def handle_speech(self, speech_text):
-        """Enhanced speech handling with context, validation, and retry logic."""
+    def _validate_caller_id(self):
+        """Validate and sanitize caller ID."""
+        raw_id = self.agi.env.get('agi_callerid', 'UNKNOWN')
+        if not re.match(r'^\+?1?\d{10,15}$', raw_id):
+            logger.warning(f"Invalid caller ID format: {raw_id}")
+            return 'INVALID'
+        return raw_id
+
+    def _load_owner_callers(self):
+        """Load owner/internal callers from configuration."""
         try:
-            valid, error = validate_speech_input(speech_text)
-            if not valid:
-                self.agi.verbose(f"Invalid input: {error}. Please try again.", 3)
-                SPEECH_RECOGNITION_ERRORS.labels(error_type=error).inc()
-                self._handle_speech_error()
-                return
-
-            chat_history = []  # Retrieve historical context as needed.
-
-            prompt = {
-                "caller_id": self.agi.env.get('agi_callerid'),
-                "chat_history": chat_history,
-                "current_input": speech_text,
-                "call_state": self.state.current_state,
-                "context": self.state.context,
-                "call_id": self.agi.env.get('agi_uniqueid', 'NO_CALL_ID'),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }
-            
-            response = self.llm.get_response(prompt)
-            self._process_llm_response(response)
-            
-            from tts.azure_tts import synthesize_speech_to_file
-            tts_output = f"/tmp/{self.agi.env.get('agi_uniqueid', 'NO_CALL_ID')}_tts.wav"
-            if synthesize_speech_to_file(response.get('text', ''), tts_output):
-                self.agi.stream_file(tts_output)
-            
+            import yaml
+            with open('config/owner_callers.yml') as f:
+                data = yaml.safe_load(f)
+            return data.get('owner_callers', [])
         except Exception as e:
-            logger.error(f"Speech handling error: {e}")
-            SPEECH_RECOGNITION_ERRORS.labels(error_type="exception").inc()
-            self._handle_speech_error()
+            logger.error(f"Error loading owner callers: {e}")
+            return []
 
-    def _process_llm_response(self, response):
-        """Process LLM response with structured handling."""
+    def handle_call(self):
+        """Main call handling entry point."""
+        if self.caller_id == 'INVALID':
+            self.agi.verbose("Invalid caller ID. Disconnecting.", 3)
+            self.agi.hangup()
+            return
+
+        # Route the call based on caller type:
+        if self.caller_id in self.owner_callers:
+            self._handle_owner_caller()
+        elif self.caller_id in self.allowed_callers:
+            # For allowed callers, use the allowed conversation flow.
+            from allowed_callers import handle_allowed_caller_conversation
+            handle_allowed_caller_conversation(self.agi, self.llm_handler, self.call_id, self.caller_id)
+        else:
+            # For all other callers, use the unknown caller flow.
+            from unknown_caller import handle_unknown_caller
+            handle_unknown_caller(self.agi, self.llm_handler, self.call_id)
+        # End of routing—if further processing is needed, add here.
+
+    def _handle_owner_caller(self):
+        """Process internal/owner calls with persistent conversation history."""
+        greeting = select_greeting('internal')
+        self.agi.verbose(greeting, 3)
+        
+        # Load previous conversation history from the database.
+        history = self.db.get_conversation_history(self.caller_id)
+        if history:
+            self.agi.verbose("Loaded previous conversation history.", 3)
+        else:
+            history = []
+        
+        # Build the prompt with historical context.
+        prompt = {
+            "caller_id": self.caller_id,
+            "chat_history": history,
+            "current_input": "",
+            "call_context": "internal"
+        }
+        
+        response = self.llm_handler.get_response(prompt)
         try:
             structured = json.loads(response.get('text', '{}'))
-            if 'next_state' in structured:
-                self.state.transition(structured['next_state'])
-                message = structured.get('message', '')
-                self.agi.verbose(message, 3)
+            if 'message' in structured:
+                self.agi.verbose(structured['message'], 3)
             else:
-                self.agi.verbose(response.get('text', ''), 3)
+                self.agi.verbose("Internal call processed.", 3)
         except JSONDecodeError:
-            self.agi.verbose(response.get('text', ''), 3)
-        self.db.add_chat_history(
-            self.agi.env.get('agi_callerid', 'UNKNOWN'),
-            self.agi.env.get('agi_uniqueid', 'NO_CALL_ID'),
-            'llm',
-            response.get('text', '')
-        )
+            self.agi.verbose("Internal call processed.", 3)
 
-    def _handle_speech_error(self):
-        """Graceful error handling with fallback options."""
-        self.state.retry_count += 1
-        if self.state.retry_count >= 3:
-            self.agi.verbose("Transferring to an operator...", 3)
-            self.agi.set_variable("TRANSFER_EXTENSION", "1000")
-            try:
-                self.state.transition("fallback")
-            except ValueError as ve:
-                logger.error(f"Failed to transition state during fallback: {ve}")
-            return
-        self.agi.verbose("I'm having trouble understanding. Please try again.", 3)
+if __name__ == '__main__':
+    handler = IVRHandler()
+    handler.handle_call()
